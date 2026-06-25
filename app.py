@@ -20,6 +20,14 @@ def get_api_key() -> str:
     except Exception:
         return os.getenv("API_KEY", "")
 
+
+def is_demo_mode() -> bool:
+    """判断当前是否为 Demo 模式（禁用真实 API 调用）"""
+    try:
+        return st.secrets.get("DEMO_MODE", "").lower() == "true"
+    except Exception:
+        return False
+
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(
     page_title="Offer 捕手",
@@ -122,6 +130,59 @@ def get_effective_jobs(target_job: str) -> list[dict]:
         # 用户输入了库里没有的岗位 → 构造虚拟岗位插入最前
         jobs.insert(0, build_virtual_job(target_job))
     return jobs
+
+
+# ── Demo 模式模拟数据 ─────────────────────────────────
+
+def _mock_match_results(target_job: str) -> list[dict]:
+    """生成模拟匹配结果（Demo 模式用）"""
+    jobs = get_effective_jobs(target_job)
+    mock_scores = [85, 72, 65, 58, 50, 45]
+    results = []
+    for j, score in zip(jobs, mock_scores[:len(jobs)]):
+        results.append({
+            "job_id": j["id"],
+            "job_title": j["title"],
+            "match_score": min(score + hash(j["title"]) % 8, 98),
+            "strengths": [
+                "专业背景与岗位要求较为匹配",
+                "项目经历与技术栈契合度较高",
+                "具备良好的学习能力和实践基础",
+            ],
+            "gaps": [
+                "部分岗位要求 1-3 年相关工作经验",
+                "缺少相关行业的实际项目深度",
+                "部分岗位所需专业技能需进一步强化",
+            ],
+            "advice": "建议补充相关领域的项目实践，并在简历中突出量化成果与关键指标。",
+        })
+    return sorted(results, key=lambda r: r["match_score"], reverse=True)
+
+
+def _mock_suggestions() -> list[dict]:
+    """生成模拟优化建议（Demo 模式用）"""
+    return [
+        {
+            "issue": "简历中缺少量化成果，无法直观体现个人贡献",
+            "suggestion": "在每个项目或工作经历中，将成果用具体数字量化。例如「提升了系统性能」应改为「将系统响应时间从 800ms 降低到 200ms，提升 75%」。",
+            "example": "主导后端服务优化，将 API 平均响应时间从 800ms 降至 200ms（降低 75%），日均支撑 50 万次请求。",
+        },
+        {
+            "issue": "技能描述过于笼统，缺少具体技术栈和熟练度",
+            "suggestion": "将「熟练掌握 Python」替换为具体场景：「熟练使用 Python 进行 Web 开发（Django/Flask）及数据处理（Pandas/NumPy）」。",
+            "example": "熟练使用 Python（Django、Flask、FastAPI）进行后端开发，使用 Pandas 和 NumPy 处理百万级数据分析任务。",
+        },
+        {
+            "issue": "项目经验与目标岗位关联度不足",
+            "suggestion": "针对目标岗位 JD，筛选并前置最相关的项目经验，使用岗位关键词（如「高并发」「分布式」「数据分析」）重新组织描述。",
+            "example": "设计并实现分布式消息队列系统，支持每秒 10 万+ 消息吞吐，基于 Redis + Kafka 构建，部署于 Kubernetes 集群。",
+        },
+        {
+            "issue": "缺少与岗位直接相关的核心关键词",
+            "suggestion": "仔细阅读目标岗位 JD，提取 5-8 个核心关键词（工具、框架、方法论），确保这些关键词自然地出现在简历各处。",
+            "example": "在技能和项目描述中融入 JD 关键词：CI/CD、Docker、Agile/Scrum、A/B 测试、数据驱动决策等。",
+        },
+    ]
 
 
 # ── LLM 调用 ──────────────────────────────────────────────
@@ -294,12 +355,16 @@ with st.sidebar:
         type="password",
         value=get_api_key() or "YOUR_API_KEY",
         help="留空则使用环境变量或 Streamlit Secrets 中的 API_KEY",
-    ) if not get_api_key() else None
+    ) if not get_api_key() and not is_demo_mode() else None
 
     # 若 Secrets 已配置，静默使用
-    _effective_key = get_api_key() or (api_key if api_key != "YOUR_API_KEY" else "")
+    _effective_key = get_api_key() or (api_key if (api_key and api_key != "YOUR_API_KEY") else "")
     if get_api_key():
         st.success("🔑 已从 Secrets 读取 API Key")
+
+    # Demo 模式提示
+    if is_demo_mode():
+        st.info("ℹ️ 当前为 **Demo 展示模式**，使用模拟数据，不调用真实 API。")
 
     match_btn = st.button("开始匹配", type="primary", use_container_width=True)
 
@@ -309,7 +374,7 @@ st.subheader("📊 匹配结果")
 if match_btn:
     if not uploaded_file:
         st.error("请先上传简历文件")
-    elif not _effective_key or _effective_key == "YOUR_API_KEY":
+    elif not is_demo_mode() and (not _effective_key or _effective_key == "YOUR_API_KEY"):
         st.error("请在侧边栏填入有效的 API Key")
     else:
         # 重置优化建议
@@ -317,23 +382,35 @@ if match_btn:
         st.session_state.optimizing_for_job_id = None
         st.session_state.optimizing_job_title = ""
 
-        with st.status("AI 匹配中…", expanded=True) as status:
-            st.write("正在调用 DeepSeek 模型分析简历…")
-            st.write("正在对比岗位需求…")
-            st.write("正在生成匹配报告…")
-            try:
-                results = match_resume_to_jobs(
-                    st.session_state.parsed_text,
-                    target_job,
-                    _effective_key,
-                )
+        if is_demo_mode():
+            # Demo 模式：使用模拟数据
+            with st.status("Demo 匹配演示…", expanded=True) as status:
+                st.write("正在模拟简历分析流程…")
+                st.write("正在演示岗位匹配功能…")
+                import time
+                time.sleep(1.5)
+                results = _mock_match_results(target_job)
                 st.session_state.match_results = results
-                status.update(label=f"匹配完成！共分析 {len(results)} 个岗位",
+                status.update(label=f"演示完成！共展示 {len(results)} 个岗位",
                               state="complete", expanded=False)
-            except Exception as e:
-                status.update(label="匹配失败", state="error")
-                st.error(f"API 调用失败: {e}")
-                st.session_state.match_results = None
+        else:
+            with st.status("AI 匹配中…", expanded=True) as status:
+                st.write("正在调用 DeepSeek 模型分析简历…")
+                st.write("正在对比岗位需求…")
+                st.write("正在生成匹配报告…")
+                try:
+                    results = match_resume_to_jobs(
+                        st.session_state.parsed_text,
+                        target_job,
+                        _effective_key,
+                    )
+                    st.session_state.match_results = results
+                    status.update(label=f"匹配完成！共分析 {len(results)} 个岗位",
+                                  state="complete", expanded=False)
+                except Exception as e:
+                    status.update(label="匹配失败", state="error")
+                    st.error(f"API 调用失败: {e}")
+                    st.session_state.match_results = None
 
 # ── 匹配结果展示 ──
 if st.session_state.match_results:
@@ -388,21 +465,33 @@ if st.session_state.match_results:
     )
 
     if opt_btn:
-        with st.status("生成优化建议中…", expanded=True) as status:
-            try:
-                suggestions = generate_optimization(
-                    st.session_state.parsed_text,
-                    opt_target_job,
-                    _effective_key,
-                )
+        if is_demo_mode():
+            # Demo 模式：模拟建议
+            import time
+            with st.status("Demo 建议生成…", expanded=True) as status:
+                time.sleep(1)
+                suggestions = _mock_suggestions()
                 st.session_state.optimization_suggestions = suggestions
                 st.session_state.optimizing_for_job_id = opt_target_id
                 st.session_state.optimizing_job_title = opt_target_title
-                status.update(label=f"已生成 {len(suggestions)} 条建议",
+                status.update(label=f"演示完成：已生成 {len(suggestions)} 条示例建议",
                               state="complete", expanded=False)
-            except Exception as e:
-                status.update(label="生成失败", state="error")
-                st.error(f"API 调用失败: {e}")
+        else:
+            with st.status("生成优化建议中…", expanded=True) as status:
+                try:
+                    suggestions = generate_optimization(
+                        st.session_state.parsed_text,
+                        opt_target_job,
+                        _effective_key,
+                    )
+                    st.session_state.optimization_suggestions = suggestions
+                    st.session_state.optimizing_for_job_id = opt_target_id
+                    st.session_state.optimizing_job_title = opt_target_title
+                    status.update(label=f"已生成 {len(suggestions)} 条建议",
+                                  state="complete", expanded=False)
+                except Exception as e:
+                    status.update(label="生成失败", state="error")
+                    st.error(f"API 调用失败: {e}")
 
     # ── 展示优化建议 ──
     if st.session_state.optimization_suggestions:
@@ -423,11 +512,20 @@ if st.session_state.match_results:
 
 else:
     st.info("请在左侧上传简历并填写目标岗位，然后点击「开始匹配」")
-    st.markdown("""
-    **使用说明：**
-    1. 左侧上传简历（PDF / Word）
-    2. 填写你的目标岗位
-    3. 填入 SiliconFlow API Key
-    4. 点击「开始匹配」
-    5. 查看匹配结果 → 点击「查看优化建议」获取简历修改方案
-    """)
+    if is_demo_mode():
+        st.markdown("""
+        **当前为 Demo 展示模式，可直接体验：**
+        1. 左侧上传简历（PDF / Word）
+        2. 填写目标岗位
+        3. 点击「开始匹配」查看模拟结果
+        4. 点击「查看优化建议」查看示例修改方案
+        """)
+    else:
+        st.markdown("""
+        **使用说明：**
+        1. 左侧上传简历（PDF / Word）
+        2. 填写你的目标岗位
+        3. 填入 SiliconFlow API Key
+        4. 点击「开始匹配」
+        5. 查看匹配结果 → 点击「查看优化建议」获取简历修改方案
+        """)
