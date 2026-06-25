@@ -319,8 +319,29 @@ if st.session_state.match_results:
     best_match = results[0]
     best_id = best_match.get("job_id")
 
+    # 优先用当前 target_job 输入值匹配岗位，无输入时回退到最高分结果
+    def find_job_by_keyword(keyword: str) -> dict | None:
+        if not keyword:
+            return None
+        kw = keyword.strip().lower()
+        jobs = load_jobs()
+        # 精确标题匹配优先
+        for j in jobs:
+            if kw in j["title"].lower():
+                return j
+        # 标签匹配
+        for j in jobs:
+            for t in j.get("tags", []):
+                if kw in t.lower():
+                    return j
+        return None
+
+    matched_job = find_job_by_keyword(target_job)
+    opt_target_id = matched_job["id"] if matched_job else best_id
+    opt_target_title = matched_job["title"] if matched_job else best_match.get("job_title", "")
+
     opt_btn = st.button(
-        f"查看优化建议（针对 {best_match.get('job_title', best_id)}）",
+        f"查看优化建议（针对 {opt_target_title}）",
         type="secondary",
     )
 
@@ -329,11 +350,11 @@ if st.session_state.match_results:
             try:
                 suggestions = generate_optimization(
                     st.session_state.parsed_text,
-                    best_id,
+                    opt_target_id,
                     _effective_key,
                 )
                 st.session_state.optimization_suggestions = suggestions
-                st.session_state.optimizing_for_job_id = best_id
+                st.session_state.optimizing_for_job_id = opt_target_id
                 status.update(label=f"已生成 {len(suggestions)} 条建议",
                               state="complete", expanded=False)
             except Exception as e:
