@@ -9,9 +9,16 @@ import os
 import re
 
 # ── 配置 ──────────────────────────────────────────────────
-API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 API_URL = "https://api.siliconflow.cn/v1/chat/completions"
 MODEL = "deepseek-ai/DeepSeek-V3"
+
+
+def get_api_key() -> str:
+    """优先从 Streamlit Secrets / 环境变量读取 API Key，无则返回空"""
+    try:
+        return st.secrets["API_KEY"]
+    except Exception:
+        return os.getenv("API_KEY", "")
 
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(
@@ -237,9 +244,14 @@ with st.sidebar:
     api_key = st.text_input(
         "API Key",
         type="password",
-        value=API_KEY_PLACEHOLDER,
-        help="SiliconFlow API Key（https://siliconflow.cn）",
-    )
+        value=get_api_key() or "YOUR_API_KEY",
+        help="留空则使用环境变量或 Streamlit Secrets 中的 API_KEY",
+    ) if not get_api_key() else None
+
+    # 若 Secrets 已配置，静默使用
+    _effective_key = get_api_key() or (api_key if api_key != "YOUR_API_KEY" else "")
+    if get_api_key():
+        st.success("🔑 已从 Secrets 读取 API Key")
 
     match_btn = st.button("开始匹配", type="primary", use_container_width=True)
 
@@ -249,7 +261,7 @@ st.subheader("📊 匹配结果")
 if match_btn:
     if not uploaded_file:
         st.error("请先上传简历文件")
-    elif not api_key or api_key == API_KEY_PLACEHOLDER:
+    elif not _effective_key or _effective_key == "YOUR_API_KEY":
         st.error("请在侧边栏填入有效的 API Key")
     else:
         # 重置优化建议
@@ -264,7 +276,7 @@ if match_btn:
                 results = match_resume_to_jobs(
                     st.session_state.parsed_text,
                     target_job,
-                    api_key,
+                    _effective_key,
                 )
                 st.session_state.match_results = results
                 status.update(label=f"匹配完成！共分析 {len(results)} 个岗位",
@@ -318,7 +330,7 @@ if st.session_state.match_results:
                 suggestions = generate_optimization(
                     st.session_state.parsed_text,
                     best_id,
-                    api_key,
+                    _effective_key,
                 )
                 st.session_state.optimization_suggestions = suggestions
                 st.session_state.optimizing_for_job_id = best_id
