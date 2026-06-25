@@ -66,6 +66,12 @@ def parse_resume(file_upload) -> str | None:
 
 # ── 岗位数据 ──────────────────────────────────────────────
 
+GENERIC_JD = (
+    "具备该岗位相关专业知识与技能；有相关项目经验或实习经历优先；"
+    "良好的学习能力、沟通能力和团队协作精神；本科及以上学历。"
+)
+
+
 def load_jobs() -> list[dict]:
     """从 jobs.json 加载岗位列表"""
     path = os.path.join(os.path.dirname(__file__), "jobs.json")
@@ -74,11 +80,48 @@ def load_jobs() -> list[dict]:
 
 
 def get_job_by_id(job_id: int) -> dict | None:
-    """按 ID 查找单个岗位"""
+    """按 ID 查找单个岗位（仅真实岗位）"""
     for j in load_jobs():
         if j["id"] == job_id:
             return j
     return None
+
+
+def build_virtual_job(title: str) -> dict:
+    """为用户输入的自定义岗位生成虚拟岗位，ID 用负数避免冲突"""
+    return {
+        "id": -1,
+        "title": title,
+        "company": "自定义岗位",
+        "city": "全国",
+        "salary": "面议",
+        "requirements": GENERIC_JD,
+        "tags": [title],
+    }
+
+
+def find_real_job(keyword: str) -> dict | None:
+    """在 jobs.json 中按关键词查找真实岗位，无匹配返回 None"""
+    if not keyword:
+        return None
+    kw = keyword.strip().lower()
+    for j in load_jobs():
+        if kw in j["title"].lower():
+            return j
+    for j in load_jobs():
+        for t in j.get("tags", []):
+            if kw in t.lower():
+                return j
+    return None
+
+
+def get_effective_jobs(target_job: str) -> list[dict]:
+    """获取用于匹配的岗位列表：真实岗位 + 必要时附加虚拟岗位"""
+    jobs = list(load_jobs())
+    if target_job and not find_real_job(target_job):
+        # 用户输入了库里没有的岗位 → 构造虚拟岗位插入最前
+        jobs.insert(0, build_virtual_job(target_job))
+    return jobs
 
 
 # ── LLM 调用 ──────────────────────────────────────────────
@@ -115,13 +158,8 @@ def extract_json(raw: str) -> str:
 
 
 def match_resume_to_jobs(resume_text: str, target_job: str, api_key: str) -> list[dict]:
-    """核心匹配：调用 LLM 对简历与所有岗位逐一评分"""
-    jobs = load_jobs()
-    if target_job:
-        jobs = sorted(jobs, key=lambda j:
-            0 if target_job.lower() in j["title"].lower()
-               or any(target_job.lower() in t.lower() for t in j.get("tags", []))
-            else 1)
+    """核心匹配：调用 LLM 对简历与所有岗位（含虚拟岗位）逐一评分"""
+    jobs = get_effective_jobs(target_job)
 
     jobs_desc = "\n\n".join([
         f"【岗位 {j['id']}】\n"
@@ -161,17 +199,25 @@ def match_resume_to_jobs(resume_text: str, target_job: str, api_key: str) -> lis
     return json.loads(json_str)
 
 
-def generate_optimization(resume_text: str, job_id: int, api_key: str) -> list[dict]:
-    """针对指定岗位生成简历优化建议"""
-    job = get_job_by_id(job_id)
-    if job is None:
-        raise ValueError(f"未找到岗位 #{job_id}")
+def generate_optimization(resume_text: str, job_source, api_key: str) -> list[dict]:
+    """针对指定岗位生成简历优化建议。
+
+    job_source 可以是:
+      - int: jobs.json 中的岗位 ID
+      - dict: 虚拟岗位或任意岗位字典（必须含 title, requirements 字段）
+    """
+    if isinstance(job_source, int):
+        job = get_job_by_id(job_source)
+        if job is None:
+            raise ValueError(f"未找到岗位 #{job_source}")
+    else:
+        job = job_source  # 虚拟岗位 dict
 
     prompt = f"""你是一位资深简历优化顾问。请根据岗位 JD 对学生的简历提出具体修改建议。
 
 【目标岗位】
 名称: {job['title']}
-公司: {job['company']}
+公司: {job.get('company', '')}
 要求: {job['requirements']}
 标签: {', '.join(job.get('tags', []))}
 
@@ -206,6 +252,8 @@ if "optimization_suggestions" not in st.session_state:
     st.session_state.optimization_suggestions = None
 if "optimizing_for_job_id" not in st.session_state:
     st.session_state.optimizing_for_job_id = None
+if "optimizing_job_title" not in st.session_state:
+    st.session_state.optimizing_job_title = ""
 
 # ── 标题 ──────────────────────────────────────────────────
 st.title("🎯 Offer 捕手")
@@ -267,6 +315,7 @@ if match_btn:
         # 重置优化建议
         st.session_state.optimization_suggestions = None
         st.session_state.optimizing_for_job_id = None
+        st.session_state.optimizing_job_title = ""
 
         with st.status("AI 匹配中…", expanded=True) as status:
             st.write("正在调用 DeepSeek 模型分析简历…")
@@ -319,26 +368,19 @@ if st.session_state.match_results:
     best_match = results[0]
     best_id = best_match.get("job_id")
 
-    # 优先用当前 target_job 输入值匹配岗位，无输入时回退到最高分结果
-    def find_job_by_keyword(keyword: str) -> dict | None:
-        if not keyword:
-            return None
-        kw = keyword.strip().lower()
-        jobs = load_jobs()
-        # 精确标题匹配优先
-        for j in jobs:
-            if kw in j["title"].lower():
-                return j
-        # 标签匹配
-        for j in jobs:
-            for t in j.get("tags", []):
-                if kw in t.lower():
-                    return j
-        return None
+    # 确定优化目标岗位：优先匹配 target_job 输入值（含虚拟岗位）
+    if target_job:
+        real = find_real_job(target_job)
+        if real:
+            opt_target_job = real
+        else:
+            opt_target_job = build_virtual_job(target_job)
+    else:
+        # 未输入目标岗位 → 用最高分结果
+        opt_target_job = get_job_by_id(best_id) or build_virtual_job(best_match.get("job_title", "未知岗位"))
 
-    matched_job = find_job_by_keyword(target_job)
-    opt_target_id = matched_job["id"] if matched_job else best_id
-    opt_target_title = matched_job["title"] if matched_job else best_match.get("job_title", "")
+    opt_target_id = opt_target_job.get("id")
+    opt_target_title = opt_target_job.get("title", "")
 
     opt_btn = st.button(
         f"查看优化建议（针对 {opt_target_title}）",
@@ -350,11 +392,12 @@ if st.session_state.match_results:
             try:
                 suggestions = generate_optimization(
                     st.session_state.parsed_text,
-                    opt_target_id,
+                    opt_target_job,
                     _effective_key,
                 )
                 st.session_state.optimization_suggestions = suggestions
                 st.session_state.optimizing_for_job_id = opt_target_id
+                st.session_state.optimizing_job_title = opt_target_title
                 status.update(label=f"已生成 {len(suggestions)} 条建议",
                               state="complete", expanded=False)
             except Exception as e:
@@ -364,9 +407,8 @@ if st.session_state.match_results:
     # ── 展示优化建议 ──
     if st.session_state.optimization_suggestions:
         suggestions = st.session_state.optimization_suggestions
-        job = get_job_by_id(st.session_state.optimizing_for_job_id)
-        if job:
-            st.caption(f"📌 针对 **{job['title']}** @ {job['company']} 的优化建议")
+        title = st.session_state.optimizing_job_title or "目标岗位"
+        st.caption(f"📌 针对 **{title}** 的优化建议")
 
         for idx, sug in enumerate(suggestions, 1):
             with st.expander(f"建议 {idx}：{sug.get('issue', '')}", expanded=(idx == 1)):
