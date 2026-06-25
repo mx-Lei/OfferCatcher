@@ -1,0 +1,47 @@
+[
+  {
+    "id": 1,
+    "title": "前端开发工程师",
+    "company": "字节跳动",
+    "city": "北京",
+    "salary": "15K-30K",
+    "requirements": "熟练掌握 HTML/CSS/JavaScript，熟悉 React 或 Vue 框架；了解 TypeScript、Webpack/Vite 等构建工具；有实际项目经验优先；计算机相关专业本科及以上",
+    "tags": ["React", "Vue", "JavaScript", "TypeScript", "CSS"]
+  },
+  {
+    "id": 2,
+    "title": "后端开发工程师",
+    "company": "美团",
+    "city": "上海",
+    "salary": "18K-35K",
+    "requirements": "熟练使用 Java 或 Go 语言，熟悉 Spring Boot/MyBatis 等框架；掌握 MySQL、Redis 等数据库；了解微服务架构、消息队列；本科及以上学历，计算机相关专业",
+    "tags": ["Java", "Go", "Spring Boot", "MySQL", "Redis", "微服务"]
+  },
+  {
+    "id": 3,
+    "title": "数据分析师",
+    "company": "腾讯",
+    "city": "深圳",
+    "salary": "15K-28K",
+    "requirements": "熟练使用 SQL 和 Python，掌握 Pandas、NumPy 等数据分析库；熟悉 Tableau 或 Power BI 等可视化工具；具备统计学基础和业务分析能力；有数据驱动决策的项目经验",
+    "tags": ["SQL", "Python", "Pandas", "Tableau", "数据分析", "统计学"]
+  },
+  {
+    "id": 4,
+    "title": "产品经理",
+    "company": "网易",
+    "city": "杭州",
+    "salary": "12K-25K",
+    "requirements": "具备用户调研和需求分析能力，能够撰写 PRD 文档；熟悉 Axure/Sketch/Figma 等原型工具；了解数据分析方法，能通过数据驱动产品迭代；良好的沟通和项目推动能力",
+    "tags": ["产品设计", "PRD", "Figma", "用户调研", "数据分析"]
+  },
+  {
+    "id": 5,
+    "title": "算法工程师",
+    "company": "百度",
+    "city": "北京",
+    "salary": "25K-50K",
+    "requirements": "硕士及以上学历，计算机/数学/统计等相关专业；扎实的机器学习、深度学习理论基础；熟练使用 PyTorch 或 TensorFlow；有 NLP/CV/推荐系统等相关项目经验；发表过顶会论文优先",
+    "tags": ["机器学习", "深度学习", "PyTorch", "NLP", "CV", "Python"]
+  }
+]
